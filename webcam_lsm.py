@@ -74,23 +74,37 @@ options = mp_vision.HandLandmarkerOptions(
 landmarker = mp_vision.HandLandmarker.create_from_options(options)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def bbox_cuadrado(landmarks, frame_w, frame_h, padding=0.30):
+def bbox_ajustado(landmarks, frame_w, frame_h, padding=0.10):
+    """Bounding box ajustado al perímetro de la mano con padding mínimo."""
     xs = [lm.x for lm in landmarks]
     ys = [lm.y for lm in landmarks]
     x1, x2 = int(min(xs) * frame_w), int(max(xs) * frame_w)
     y1, y2 = int(min(ys) * frame_h), int(max(ys) * frame_h)
 
-    lado = max(x2 - x1, y2 - y1)
-    pad  = int(lado * padding)
-    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-    mitad  = lado // 2 + pad
+    pad_x = int((x2 - x1) * padding)
+    pad_y = int((y2 - y1) * padding)
+    x1 = max(0, x1 - pad_x)
+    y1 = max(0, y1 - pad_y)
+    x2 = min(frame_w, x2 + pad_x)
+    y2 = min(frame_h, y2 + pad_y)
+    return x1, y1, x2, y2
 
-    x1 = max(0, cx - mitad)
-    y1 = max(0, cy - mitad)
-    x2 = min(frame_w, cx + mitad)
-    y2 = min(frame_h, cy + mitad)
-    lado_f = min(x2 - x1, y2 - y1)
-    return x1, y1, x1 + lado_f, y1 + lado_f
+def letterbox(bgr_crop, size=224):
+    """
+    Escala el recorte para que quepa en size×size manteniendo la relación de
+    aspecto, luego centra sobre un canvas negro de size×size.
+    """
+    h, w = bgr_crop.shape[:2]
+    scale  = size / max(h, w)
+    new_w  = int(w * scale)
+    new_h  = int(h * scale)
+    resized = cv2.resize(bgr_crop, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    canvas = np.zeros((size, size, 3), dtype=np.uint8)
+    y_off  = (size - new_h) // 2
+    x_off  = (size - new_w) // 2
+    canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
+    return canvas
 
 def dibujar_esqueleto(frame, landmarks, frame_w, frame_h):
     pts = [(int(lm.x * frame_w), int(lm.y * frame_h)) for lm in landmarks]
@@ -125,13 +139,14 @@ while True:
 
     if result.hand_landmarks:
         lms = result.hand_landmarks[0]
-        x1, y1, x2, y2 = bbox_cuadrado(lms, w, h)
+        x1, y1, x2, y2 = bbox_ajustado(lms, w, h)
 
-        crop_raw   = frame[y1:y2, x1:x2]
-        crop_vista = cv2.resize(crop_raw, (CROP_SHOW, CROP_SHOW))
+        crop_raw    = frame[y1:y2, x1:x2]
+        crop_modelo = letterbox(crop_raw, size=IMG_SIZE[0])   # 224×224 con padding negro
+        crop_vista  = cv2.resize(crop_modelo, (CROP_SHOW, CROP_SHOW))
 
         if frame_idx % INFER_EVERY == 0 and crop_raw.size > 0:
-            clase_actual, conf_actual = predecir_imagen(crop_raw)
+            clase_actual, conf_actual = predecir_imagen(crop_modelo)
 
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
         dibujar_esqueleto(frame, lms, w, h)
